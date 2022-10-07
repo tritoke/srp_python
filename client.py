@@ -136,8 +136,8 @@ def main():
                 srp.register()
             else:
                 K = srp.negotiate()
-                print(f"agreed shared key: {K:X}")
-                print(srp.recv_encrypted(K))
+                print(f"agreed shared key: {K:0256X}")
+                print(f"Received encrypted message: {srp.recv_encrypted(K)}")
         except KeyError:
             if "success" not in srp.data:
                 raise
