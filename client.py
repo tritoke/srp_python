@@ -2,39 +2,25 @@
 
 import argparse
 import getpass
-import json
 import os
 import socket
 import sys
 from base64 import b64decode
 from srp import *
+from json_mixins import JsonClient
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
 
-DEBUG_RECV = True
-DEBUG_SEND = True
+class SRP(JsonClient):
+    def __init__(self, username, password, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-
-class SRP:
-    def __init__(self, conn, username, password):
-        self.conn = conn
         self.username = username
         self.password = password
         self.I = b2l(username.encode())
         self.p = b2l(password.encode())
 
-    def recv_json(self):
-        received = self.conn.recv(4096).strip().decode()
-        if DEBUG_RECV:
-            print(f"[SRP.recv_json] {received = }")
-        self.data = json.loads(received)
-
-    def send_json(self, **kwargs):
-        data = json.dumps(kwargs).encode() + b"\n"
-        if DEBUG_SEND:
-            print(f"[SRP.send_json] {data = }")
-        self.conn.sendall(data)
 
     def register(self):
         # send a register command
@@ -114,9 +100,8 @@ def main():
     HOST = args.host
     PORT = args.port
 
-    global DEBUG_RECV, DEBUG_SEND
-    DEBUG_RECV = args.debug & 1 == 1
-    DEBUG_SEND = args.debug & 2 == 2
+    debug_recv = args.debug & 1 == 1
+    debug_send = args.debug & 2 == 2
 
     action = args.action
     if action not in ["register", "negotiate"]:
@@ -129,7 +114,13 @@ def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((HOST, PORT))
 
-        srp = SRP(sock, username, password)
+        srp = SRP(
+            username,
+            password,
+            conn=sock,
+            debug_send=debug_send,
+            debug_recv=debug_recv
+        )
 
         try:
             if action == "register":

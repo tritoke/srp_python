@@ -1,38 +1,22 @@
 #!/usr/bin/env python
 
 import socketserver
-import json
 import os
 from base64 import b64encode
 from srp import *
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
-
-
-DEBUG_RECV = True
-DEBUG_SEND = True
+from json_mixins import JsonServerMixin
 
 
 def b64e(x):
     return b64encode(x).decode()
 
-class SRPHandler(socketserver.BaseRequestHandler):
+class SRPHandler(socketserver.BaseRequestHandler, JsonServerMixin):
     database = {}
 
-    def _recv_json(self):
-        received = self.request.recv(4096).strip().decode()
-        if DEBUG_RECV:
-            print(f"[SRPHandler._recv_json()] {received = }")
-        self.data = json.loads(received)
-
-    def _send_json(self, **kwargs):
-        data = json.dumps(kwargs).encode() + b"\n"
-        if DEBUG_SEND:
-            print(f"[SRPHandler._send_json()] {data = }")
-        self.request.sendall(data)
-
     def handle(self):
-        self._recv_json()
+        self.recv_json()
 
         try:
             action = self.data["action"]
@@ -41,7 +25,7 @@ class SRPHandler(socketserver.BaseRequestHandler):
             elif action == "negotiate":
                 self.handle_srp_negotiate_key()
             else:
-                self._send_json(error=f"Unrecognised action: {action}")
+                self.send_json(error=f"Unrecognised action: {action}")
         except KeyError:
             if "success" not in self.data:
                 raise
@@ -58,7 +42,7 @@ class SRPHandler(socketserver.BaseRequestHandler):
         passwd = self.data["password"]
 
         if user in self.database:
-            self._send_json(success=False, message=f"User already registered")
+            self.send_json(success=False, message=f"User already registered")
             return
 
         I = b2l(user.encode())
@@ -68,7 +52,7 @@ class SRPHandler(socketserver.BaseRequestHandler):
         v = pow(g, x, N)
         self.database[user] = dict(salt=s, verifier=v)
 
-        self._send_json(success=True, message=f"Successfully registered user {user}")
+        self.send_json(success=True, message=f"Successfully registered user {user}")
 
     def handle_srp_negotiate_key(self):
         # receive the username I from the client
@@ -77,17 +61,17 @@ class SRPHandler(socketserver.BaseRequestHandler):
         I = b2l(user.encode())
 
         if (db_record := self.database.get(user)) is None:
-            self._send_json(success=False, message=f"Failed to find user in DB.")
+            self.send_json(success=False, message=f"Failed to find user in DB.")
             return
 
         s = db_record["salt"]
         v = db_record["verifier"]
 
         # send s to the client
-        self._send_json(salt=s)
+        self.send_json(salt=s)
 
         # receive A from the user
-        self._recv_json()
+        self.recv_json()
         A = self.data["user_public_ephemeral_key"]
 
         # calculate B
@@ -95,14 +79,14 @@ class SRPHandler(socketserver.BaseRequestHandler):
         B = 3 * v + pow(g, b, N)
 
         # send B to the client
-        self._send_json(server_public_ephemeral_key=B)
+        self.send_json(server_public_ephemeral_key=B)
 
         # calculate u and S
         u = H(A, B)
         S = pow(A * pow(v, u, N), b, N)
 
         # receive M1 from the client
-        self._recv_json()
+        self.recv_json()
         M1 = self.data["verification_message"]
 
         # verify M1
@@ -112,7 +96,7 @@ class SRPHandler(socketserver.BaseRequestHandler):
 
         # calculate M2
         M2 = H(A, M1, S)
-        self._send_json(verification_message=M2)
+        self.send_json(verification_message=M2)
 
         # calculate key
         K = H(S)
@@ -128,7 +112,7 @@ class SRPHandler(socketserver.BaseRequestHandler):
         ct, mac = cipher.encrypt_and_digest(f"Successfully agreed shared key for {user}.".encode())
 
         # notify the client of the success
-        self._send_json(success=True, nonce=b64e(nonce), enc_message=b64e(ct), tag=b64e(mac))
+        self.send_json(success=True, nonce=b64e(nonce), enc_message=b64e(ct), tag=b64e(mac))
 
 
 def main():
@@ -136,9 +120,8 @@ def main():
     PORT = int(os.getenv("PORT", "12345"))
     DEBUG = int(os.getenv("DEBUG", "0"))
 
-    global DEBUG_RECV, DEBUG_SEND
-    DEBUG_RECV = DEBUG & 1 == 1
-    DEBUG_SEND = DEBUG & 2 == 2
+    SRPHandler.debug_recv = DEBUG & 1 == 1
+    SRPHandler.debug_send = DEBUG & 2 == 2
 
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer((HOST, PORT), SRPHandler) as server:
